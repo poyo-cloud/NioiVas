@@ -1065,26 +1065,73 @@ function buildCsv(records) {
 
 function buildExportColumns() {
   return [
-    "patient_id",
-    "session_date",
-    "pattern",
-    ...VAS_ITEMS.map((item) => `${CONTROL_EXPORT_KEY}_${item.id}`),
-    ...CONDITION_EXPORT_KEYS.flatMap((exportKey) =>
-      VAS_ITEMS.map((item) => `${exportKey}_${item.id}`),
-    ),
+    "SubjectNo",
+    "Name",
+    "Pattern",
+    "Age",
+    "Sex(M/F)",
+    "Year of education",
+    "StateAnx",
+    "TraitAnx",
+    "CDR",
+    "NEO-FFI_N",
+    "NEO-FFI_E",
+    "NEO-FFI_O",
+    "NEO-FFI_A",
+    "NEO-FFI_C",
+    ...buildSummaryVasHeaders(),
   ];
 }
 
 function buildExportRow(record) {
   return [
     record.participantId,
-    record.sessionDate,
+    "",
     record.patternKey,
-    ...VAS_ITEMS.map((item) => formatScore(record.answers?.[CONTROL_EXPORT_KEY]?.[item.id])),
-    ...CONDITION_EXPORT_KEYS.flatMap((exportKey) =>
-      VAS_ITEMS.map((item) => formatScore(record.answers?.[exportKey]?.[item.id])),
-    ),
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ...buildSummaryVasValues(record),
   ];
+}
+
+function buildSummaryVasHeaders() {
+  return [
+    "B_Olf_threshold",
+    "B_Olf_favo",
+    "B_comfort",
+    "B_tiredness",
+    "B_concentrate",
+    ...Array.from({ length: 7 }, (_item, index) => {
+      const prefix = `C${index + 1}`;
+      return [
+        `${prefix}_Olf_threshold`,
+        `${prefix}_Olf_favo`,
+        `${prefix}_comfort`,
+        `${prefix}_tiredness`,
+        `${prefix}_concentrate`,
+      ];
+    }).flat(),
+  ];
+}
+
+function buildSummaryVasValues(record) {
+  const itemOrder = ["smell", "preference", "comfort", "fatigue", "focus"];
+  const exportOrder = [
+    CONTROL_EXPORT_KEY,
+    ...CONDITION_EXPORT_KEYS,
+  ];
+
+  return exportOrder.flatMap((exportKey) =>
+    itemOrder.map((itemId) => formatScore(record.answers?.[exportKey]?.[itemId])),
+  );
 }
 
 function formatScore(value) {
