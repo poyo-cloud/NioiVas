@@ -66,6 +66,12 @@ const VAS_ITEMS = [
   },
 ];
 
+const REACTION_TIME_FIELD = {
+  id: "reactionTime",
+  number: 6,
+  prompt: "reaction time",
+};
+
 const refs = {
   statusSummary: document.getElementById("statusSummary"),
   flowStrip: document.getElementById("flowStrip"),
@@ -485,12 +491,13 @@ function renderTimepointScreen(screen) {
         </div>
         <div class="status-tags">
           <span class="badge-soft">${screen.pageNumber} / ${screen.pageCount}</span>
-          <span class="badge-soft">${answeredCount} / ${VAS_ITEMS.length} 項目</span>
+          <span class="badge-soft" data-role="answered-count">${answeredCount} / ${getTimepointItemCount()} 項目</span>
         </div>
       </div>
 
       <div class="question-grid">
         ${VAS_ITEMS.map((item) => renderVasCard(screen.exportKey, item)).join("")}
+        ${renderReactionTimeCard(screen.exportKey)}
       </div>
 
       <div class="nav-row">
@@ -540,6 +547,31 @@ function renderVasCard(exportKey, item) {
           </div>
         </div>
       </div>
+    </section>
+  `;
+}
+
+function renderReactionTimeCard(exportKey) {
+  return `
+    <section class="vas-card reaction-card">
+      <h3 class="question-title">
+        <span class="question-number">${escapeHtml(String(REACTION_TIME_FIELD.number))}.</span>
+        <span>${escapeHtml(REACTION_TIME_FIELD.prompt)}</span>
+      </h3>
+
+      <label class="field-stack reaction-field">
+        <input
+          class="number-input reaction-input"
+          type="number"
+          min="0"
+          step="any"
+          inputmode="decimal"
+          data-field="reactionTime"
+          data-export-key="${escapeAttribute(exportKey)}"
+          placeholder="入力してください"
+          value="${escapeAttribute(getStoredReactionTime(exportKey))}"
+        />
+      </label>
     </section>
   `;
 }
@@ -668,6 +700,19 @@ function handleViewInput(event) {
   const target = event.target;
   const field = target.dataset.field;
   if (!field) {
+    return;
+  }
+
+  if (field === "reactionTime") {
+    const exportKey = target.dataset.exportKey;
+    if (!exportKey) {
+      return;
+    }
+
+    state.answers[exportKey].reactionTime = target.value;
+    persistDraft();
+    renderStatus();
+    syncTimepointAnsweredCount(exportKey);
     return;
   }
 
@@ -823,7 +868,7 @@ function handleHistoryClick(event) {
     if (record) {
       exportRecordsAsCsv(
         [record],
-        `nioi-vas-${sanitizeFileName(record.participantId || record.id)}`,
+        `VAS_${sanitizeFileName(record.participantId || record.id)}.csv`,
       );
     }
     return;
@@ -955,14 +1000,24 @@ function isTimepointComplete(exportKey) {
 }
 
 function getMissingItemIdsForExportKey(exportKey) {
-  return VAS_ITEMS.filter((item) => getStoredAnswer(exportKey, item.id) == null).map(
-    (item) => item.id,
-  );
+  const missingItemIds = VAS_ITEMS.filter(
+    (item) => getStoredAnswer(exportKey, item.id) == null,
+  ).map((item) => item.id);
+
+  if (!getStoredReactionTime(exportKey).trim()) {
+    missingItemIds.push(REACTION_TIME_FIELD.id);
+  }
+
+  return missingItemIds;
 }
 
 function showMissingItemsAlert(itemIds) {
   const labels = itemIds
     .map((itemId) => {
+      if (itemId === REACTION_TIME_FIELD.id) {
+        return `${REACTION_TIME_FIELD.number}. ${REACTION_TIME_FIELD.prompt}`;
+      }
+
       const item = VAS_ITEMS.find((entry) => entry.id === itemId);
       return item ? `${item.number}. ${item.prompt}` : itemId;
     })
@@ -974,6 +1029,11 @@ function showMissingItemsAlert(itemIds) {
 function getStoredAnswer(exportKey, itemId) {
   const value = state.answers[exportKey]?.[itemId];
   return value == null ? null : Number(value);
+}
+
+function getStoredReactionTime(exportKey) {
+  const value = state.answers[exportKey]?.reactionTime;
+  return value == null ? "" : String(value);
 }
 
 function getCurrentScreen() {
@@ -989,9 +1049,11 @@ function getFirstTimepointScreenIndex() {
 }
 
 function countAnsweredItemsForExportKey(exportKey) {
-  return VAS_ITEMS.reduce((count, item) => {
+  const answeredCount = VAS_ITEMS.reduce((count, item) => {
     return getStoredAnswer(exportKey, item.id) == null ? count : count + 1;
   }, 0);
+
+  return getStoredReactionTime(exportKey).trim() ? answeredCount + 1 : answeredCount;
 }
 
 function countCompletedTimepoints() {
@@ -1002,16 +1064,33 @@ function countCompletedTimepoints() {
 
 function countCompletedTimepointsInRecord(record) {
   return buildTimepoints(record.patternKey).reduce((count, timepoint) => {
-    return countAnsweredItemsInRecord(record, timepoint.exportKey) === VAS_ITEMS.length
+    return countAnsweredItemsInRecord(record, timepoint.exportKey) === getTimepointItemCount()
       ? count + 1
       : count;
   }, 0);
 }
 
 function countAnsweredItemsInRecord(record, exportKey) {
-  return VAS_ITEMS.reduce((count, item) => {
+  const answeredCount = VAS_ITEMS.reduce((count, item) => {
     return record.answers?.[exportKey]?.[item.id] == null ? count : count + 1;
   }, 0);
+
+  return String(record.answers?.[exportKey]?.reactionTime || "").trim()
+    ? answeredCount + 1
+    : answeredCount;
+}
+
+function getTimepointItemCount() {
+  return VAS_ITEMS.length + 1;
+}
+
+function syncTimepointAnsweredCount(exportKey) {
+  const answeredCountNode = refs.viewPanel.querySelector('[data-role="answered-count"]');
+  if (!answeredCountNode) {
+    return;
+  }
+
+  answeredCountNode.textContent = `${countAnsweredItemsForExportKey(exportKey)} / ${getTimepointItemCount()} 項目`;
 }
 
 function hasCalibrationSaved() {
@@ -1046,13 +1125,16 @@ function exportAllHistory() {
     return;
   }
 
-  exportRecordsAsCsv(historyEntries, "nioi-vas-history");
+  exportRecordsAsCsv(
+    historyEntries,
+    `VAS_history-${timestampFilePart(new Date().toISOString())}.csv`,
+  );
 }
 
-function exportRecordsAsCsv(records, filenameStem) {
+function exportRecordsAsCsv(records, filename) {
   const content = `\uFEFF${buildCsv(records)}`;
   downloadTextFile(
-    `${filenameStem}-${timestampFilePart(new Date().toISOString())}.csv`,
+    filename,
     content,
     "text/csv;charset=utf-8",
   );
@@ -1066,19 +1148,7 @@ function buildCsv(records) {
 function buildExportColumns() {
   return [
     "SubjectNo",
-    "Name",
     "Pattern",
-    "Age",
-    "Sex(M/F)",
-    "Year of education",
-    "StateAnx",
-    "TraitAnx",
-    "CDR",
-    "NEO-FFI_N",
-    "NEO-FFI_E",
-    "NEO-FFI_O",
-    "NEO-FFI_A",
-    "NEO-FFI_C",
     ...buildSummaryVasHeaders(),
   ];
 }
@@ -1086,18 +1156,7 @@ function buildExportColumns() {
 function buildExportRow(record) {
   return [
     record.participantId,
-    "",
     record.patternKey,
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
     ...buildSummaryVasValues(record),
   ];
 }
@@ -1109,6 +1168,7 @@ function buildSummaryVasHeaders() {
     "B_comfort",
     "B_tiredness",
     "B_concentrate",
+    "B_reactiontime",
     ...Array.from({ length: 7 }, (_item, index) => {
       const prefix = `C${index + 1}`;
       return [
@@ -1117,6 +1177,7 @@ function buildSummaryVasHeaders() {
         `${prefix}_comfort`,
         `${prefix}_tiredness`,
         `${prefix}_concentrate`,
+        `${prefix}_reactiontime`,
       ];
     }).flat(),
   ];
@@ -1130,12 +1191,19 @@ function buildSummaryVasValues(record) {
   ];
 
   return exportOrder.flatMap((exportKey) =>
-    itemOrder.map((itemId) => formatScore(record.answers?.[exportKey]?.[itemId])),
+    [
+      ...itemOrder.map((itemId) => formatScore(record.answers?.[exportKey]?.[itemId])),
+      formatReactionTime(record.answers?.[exportKey]?.reactionTime),
+    ],
   );
 }
 
 function formatScore(value) {
   return value == null ? "" : (Number(value) / 10).toFixed(1);
+}
+
+function formatReactionTime(value) {
+  return value == null ? "" : String(value).trim();
 }
 
 function csvEscape(value) {
