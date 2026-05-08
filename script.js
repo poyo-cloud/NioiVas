@@ -71,6 +71,7 @@ const REACTION_TIME_FIELD = {
   number: 6,
   prompt: "reaction time",
 };
+const REACTION_TIME_TRIAL_COUNT = 3;
 
 const refs = {
   statusSummary: document.getElementById("statusSummary"),
@@ -150,14 +151,24 @@ function buildTimepoints(patternKey) {
 
 function createAnswerStore() {
   const answers = {
-    [CONTROL_EXPORT_KEY]: {},
+    [CONTROL_EXPORT_KEY]: createAnswerEntry(),
   };
 
   CONDITION_EXPORT_KEYS.forEach((key) => {
-    answers[key] = {};
+    answers[key] = createAnswerEntry();
   });
 
   return answers;
+}
+
+function createAnswerEntry() {
+  return {
+    reactionTimes: createEmptyReactionTimes(),
+  };
+}
+
+function createEmptyReactionTimes() {
+  return Array.from({ length: REACTION_TIME_TRIAL_COUNT }, () => "");
 }
 
 function createInitialState() {
@@ -230,10 +241,35 @@ function normalizeAnswers(value) {
       return;
     }
 
-    answers[key] = { ...source };
+    const { reactionTime, reactionTimes, ...rest } = source;
+    answers[key] = {
+      ...createAnswerEntry(),
+      ...rest,
+      reactionTimes: normalizeReactionTimes(reactionTimes ?? reactionTime),
+    };
   });
 
   return answers;
+}
+
+function normalizeReactionTimes(value) {
+  if (Array.isArray(value)) {
+    return createEmptyReactionTimes().map((_item, index) => {
+      const item = value[index];
+      return item == null ? "" : String(item);
+    });
+  }
+
+  const normalized = createEmptyReactionTimes();
+  if (value == null) {
+    return normalized;
+  }
+
+  const text = String(value).trim();
+  if (text) {
+    normalized[0] = text;
+  }
+  return normalized;
 }
 
 function loadDraft() {
@@ -552,6 +588,8 @@ function renderVasCard(exportKey, item) {
 }
 
 function renderReactionTimeCard(exportKey) {
+  const reactionTimes = getStoredReactionTimes(exportKey);
+
   return `
     <section class="vas-card reaction-card">
       <h3 class="question-title">
@@ -559,19 +597,29 @@ function renderReactionTimeCard(exportKey) {
         <span>${escapeHtml(REACTION_TIME_FIELD.prompt)}</span>
       </h3>
 
-      <label class="field-stack reaction-field">
-        <input
-          class="number-input reaction-input"
-          type="number"
-          min="0"
-          step="any"
-          inputmode="decimal"
-          data-field="reactionTime"
-          data-export-key="${escapeAttribute(exportKey)}"
-          placeholder="入力してください"
-          value="${escapeAttribute(getStoredReactionTime(exportKey))}"
-        />
-      </label>
+      <div class="reaction-grid">
+        ${reactionTimes
+          .map(
+            (value, index) => `
+              <label class="field-stack reaction-field">
+                <span class="field-label reaction-label">${index + 1}回目</span>
+                <input
+                  class="number-input reaction-input"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputmode="decimal"
+                  data-field="reactionTime"
+                  data-export-key="${escapeAttribute(exportKey)}"
+                  data-reaction-index="${escapeAttribute(String(index))}"
+                  placeholder="入力してください"
+                  value="${escapeAttribute(value)}"
+                />
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
     </section>
   `;
 }
@@ -705,11 +753,15 @@ function handleViewInput(event) {
 
   if (field === "reactionTime") {
     const exportKey = target.dataset.exportKey;
-    if (!exportKey) {
+    const reactionIndex = Number(target.dataset.reactionIndex);
+    if (!exportKey || !Number.isInteger(reactionIndex)) {
       return;
     }
 
-    state.answers[exportKey].reactionTime = target.value;
+    const reactionTimes = getStoredReactionTimes(exportKey);
+    reactionTimes[reactionIndex] = target.value;
+    state.answers[exportKey].reactionTimes = reactionTimes;
+    delete state.answers[exportKey].reactionTime;
     persistDraft();
     renderStatus();
     syncTimepointAnsweredCount(exportKey);
@@ -1004,7 +1056,7 @@ function getMissingItemIdsForExportKey(exportKey) {
     (item) => getStoredAnswer(exportKey, item.id) == null,
   ).map((item) => item.id);
 
-  if (!getStoredReactionTime(exportKey).trim()) {
+  if (!areReactionTimesComplete(getStoredReactionTimes(exportKey))) {
     missingItemIds.push(REACTION_TIME_FIELD.id);
   }
 
@@ -1015,7 +1067,7 @@ function showMissingItemsAlert(itemIds) {
   const labels = itemIds
     .map((itemId) => {
       if (itemId === REACTION_TIME_FIELD.id) {
-        return `${REACTION_TIME_FIELD.number}. ${REACTION_TIME_FIELD.prompt}`;
+        return `${REACTION_TIME_FIELD.number}. ${REACTION_TIME_FIELD.prompt}（3回とも入力）`;
       }
 
       const item = VAS_ITEMS.find((entry) => entry.id === itemId);
@@ -1031,9 +1083,30 @@ function getStoredAnswer(exportKey, itemId) {
   return value == null ? null : Number(value);
 }
 
-function getStoredReactionTime(exportKey) {
-  const value = state.answers[exportKey]?.reactionTime;
-  return value == null ? "" : String(value);
+function getStoredReactionTimes(exportKey) {
+  return normalizeReactionTimes(
+    state.answers[exportKey]?.reactionTimes ?? state.answers[exportKey]?.reactionTime,
+  );
+}
+
+function areReactionTimesComplete(reactionTimes) {
+  return reactionTimes.every((value) => String(value).trim());
+}
+
+function getAnswerEntryReactionTimes(answerEntry) {
+  return normalizeReactionTimes(answerEntry?.reactionTimes ?? answerEntry?.reactionTime);
+}
+
+function isLegacyReactionTimeComplete(answerEntry) {
+  if (!answerEntry || typeof answerEntry !== "object") {
+    return false;
+  }
+
+  if (Array.isArray(answerEntry.reactionTimes)) {
+    return false;
+  }
+
+  return String(answerEntry.reactionTime || "").trim() !== "";
 }
 
 function getCurrentScreen() {
@@ -1053,7 +1126,9 @@ function countAnsweredItemsForExportKey(exportKey) {
     return getStoredAnswer(exportKey, item.id) == null ? count : count + 1;
   }, 0);
 
-  return getStoredReactionTime(exportKey).trim() ? answeredCount + 1 : answeredCount;
+  return areReactionTimesComplete(getStoredReactionTimes(exportKey))
+    ? answeredCount + 1
+    : answeredCount;
 }
 
 function countCompletedTimepoints() {
@@ -1075,9 +1150,12 @@ function countAnsweredItemsInRecord(record, exportKey) {
     return record.answers?.[exportKey]?.[item.id] == null ? count : count + 1;
   }, 0);
 
-  return String(record.answers?.[exportKey]?.reactionTime || "").trim()
-    ? answeredCount + 1
-    : answeredCount;
+  const answerEntry = record.answers?.[exportKey];
+  const hasReactionTime = areReactionTimesComplete(
+    getAnswerEntryReactionTimes(answerEntry),
+  ) || isLegacyReactionTimeComplete(answerEntry);
+
+  return hasReactionTime ? answeredCount + 1 : answeredCount;
 }
 
 function getTimepointItemCount() {
@@ -1193,7 +1271,7 @@ function buildSummaryVasValues(record) {
   return exportOrder.flatMap((exportKey) =>
     [
       ...itemOrder.map((itemId) => formatScore(record.answers?.[exportKey]?.[itemId])),
-      formatReactionTime(record.answers?.[exportKey]?.reactionTime),
+      formatReactionTimeAverage(record.answers?.[exportKey]),
     ],
   );
 }
@@ -1202,13 +1280,28 @@ function formatScore(value) {
   return value == null ? "" : (Number(value) / 10).toFixed(1);
 }
 
-function formatReactionTime(value) {
-  return value == null ? "" : String(value).trim();
+function formatReactionTimeAverage(answerEntry) {
+  const values = getAnswerEntryReactionTimes(answerEntry)
+    .map((value) => String(value).trim())
+    .filter((value) => value !== "")
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+
+  if (!values.length) {
+    return "";
+  }
+
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return trimTrailingZeros(average.toFixed(3));
 }
 
 function csvEscape(value) {
   const text = value == null ? "" : String(value);
   return `"${text.replaceAll('"', '""')}"`;
+}
+
+function trimTrailingZeros(value) {
+  return value.includes(".") ? value.replace(/\.?0+$/, "") : value;
 }
 
 function findHistoryEntry(recordId) {

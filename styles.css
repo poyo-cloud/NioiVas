@@ -212,11 +212,21 @@ h2 {
 }
 
 .reaction-field {
-  max-width: 280px;
+  max-width: none;
 }
 
 .reaction-input {
   min-height: 50px;
+}
+
+.reaction-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.reaction-label {
+  font-size: 0.86rem;
 }
 
 .summary-grid {
@@ -623,6 +633,10 @@ h2 {
 
   .vas-label-row {
     font-size: 0.72rem;
+  }
+
+  .reaction-grid {
+    grid-template-columns: 1fr;
   }
 }
 
